@@ -1,29 +1,149 @@
 <!DOCTYPE html>
 <html lang="ko">
   <head>
-    <meta charset="utf-8" />
-    <title>Quest3 AR 벽돌깨기 (통합 파일)</title>
-    <!-- A-Frame 라이브러리 -->
-    <script src="https://aframe.io/releases/1.3.0/aframe.min.js"></script>
-    <!-- aframe-physics-system (Cannon.js 기반) -->
+    <meta charset="UTF-8" />
+    <title>Meta Quest3 AR 벽돌깨기 (A-Frame 1.2.0)</title>
+    <!-- A-Frame 1.2.0 (THREE.Geometry 지원) -->
+    <script src="https://aframe.io/releases/1.2.0/aframe.min.js"></script>
+    <!-- aframe-physics-system 4.0.1 -->
     <script src="https://cdn.jsdelivr.net/npm/aframe-physics-system@4.0.1/dist/aframe-physics-system.min.js"></script>
+    
+    <!-- 컴포넌트들을 먼저 등록 (씬 이전에 로드) -->
+    <script>
+      // 1. 바닥 자동 인식 (Floor Detector)
+      AFRAME.registerComponent('floor-detector', {
+        init: function () {
+          this.hitTestSource = null;
+          this.refSpace = null;
+          this.viewerSpace = null;
+          this.session = null;
+          const sceneEl = this.el.sceneEl;
+          
+          sceneEl.addEventListener('enter-vr', () => {
+            this.session = sceneEl.renderer.xr.getSession();
+            if (this.session && this.session.isImmersiveAr) {
+              this.session.requestReferenceSpace('viewer').then((space) => {
+                this.viewerSpace = space;
+                return this.session.requestHitTestSource({ space: this.viewerSpace });
+              }).then((source) => {
+                this.hitTestSource = source;
+                console.log("Hit test source 생성됨.");
+              }).catch((err) => {
+                console.error("Hit test source 생성 에러:", err);
+              });
+              this.session.requestReferenceSpace('local-floor').then((refSpace) => {
+                this.refSpace = refSpace;
+                console.log("local-floor 참조공간 설정됨.");
+              }).catch((err) => {
+                console.error("local-floor 참조공간 에러:", err);
+              });
+            } else {
+              console.warn("immersive-ar 세션이 아닙니다.");
+            }
+          });
+          
+          sceneEl.addEventListener('exit-vr', () => {
+            this.hitTestSource = null;
+            this.refSpace = null;
+            this.viewerSpace = null;
+            this.session = null;
+            console.log("AR 세션 종료됨. 자원 정리 완료.");
+          });
+        },
+        tick: function () {
+          if (!this.hitTestSource || !this.session || !this.refSpace) { return; }
+          const xrFrame = this.el.sceneEl.frame;
+          if (!xrFrame) { return; }
+          const hitTestResults = xrFrame.getHitTestResults(this.hitTestSource);
+          if (hitTestResults.length > 0) {
+            const hit = hitTestResults[0];
+            const pose = hit.getPose(this.refSpace);
+            if (pose) {
+              this.el.object3D.position.set(
+                pose.transform.position.x,
+                pose.transform.position.y,
+                pose.transform.position.z
+              );
+              console.log("바닥 위치 업데이트:", pose.transform.position);
+            }
+          }
+        }
+      });
+      
+      // 2. 공 충돌 판정 및 효과 (Ball Collision)
+      AFRAME.registerComponent('ball-collision', {
+        init: function () {
+          this.el.addEventListener('collide', (e) => {
+            const collidedEl = e.detail.body.el;
+            if (collidedEl && collidedEl.classList && collidedEl.classList.contains('brick')) {
+              collidedEl.parentNode.removeChild(collidedEl);
+              console.log("벽돌 파괴됨:", collidedEl);
+            }
+          });
+        }
+      });
+      
+      // 3. 공 초기 발사 (Ball Launcher)
+      AFRAME.registerComponent('ball-launcher', {
+        init: function () {
+          setTimeout(() => {
+            if (this.el.body) {
+              this.el.body.velocity.set(0.5, 0.5, 0);
+              console.log("공 발사됨, 초기 속도:", this.el.body.velocity);
+            } else {
+              console.warn("ball-launcher: 물리 body가 준비되지 않음.");
+            }
+          }, 1000);
+        }
+      });
+      
+      // 4. 발판 컨트롤러 (Paddle Controller)
+      AFRAME.registerComponent('paddle-controller', {
+        schema: {
+          controllerId: { default: '#right-controller' }
+        },
+        init: function () {
+          this.controller = document.querySelector(this.data.controllerId);
+          if (!this.controller) {
+            console.warn("paddle-controller: 컨트롤러 요소를 찾을 수 없음:", this.data.controllerId);
+          }
+        },
+        tick: function () {
+          if (!this.controller) { return; }
+          const tracked = this.controller.components['tracked-controls'];
+          if (!tracked || !tracked.controller) { return; }
+          const gamepad = tracked.controller;
+          if (gamepad.buttons[0] && gamepad.buttons[0].pressed) {
+            const controllerPos = new THREE.Vector3();
+            this.controller.object3D.getWorldPosition(controllerPos);
+            this.el.object3D.position.x = controllerPos.x;
+            if (this.el.body) {
+              this.el.body.position.x = controllerPos.x;
+              this.el.body.velocity.x = 0;
+            }
+            console.log("발판 이동, 컨트롤러 x:", controllerPos.x);
+          }
+        }
+      });
+    </script>
+    
     <style>
       body { margin: 0; padding: 0; overflow: hidden; }
     </style>
   </head>
   <body>
-    <!-- immersive-ar 모드, local-floor 참조, 패스스루 AR 구현 -->
-    <a-scene 
-      xr="mode: 'immersive-ar'; referenceSpaceType: 'local-floor';" 
-      physics="gravity: 0 0 0" 
-      embedded 
-      renderer="logarithmicDepthBuffer: true;" 
+    <!-- AR 모드 및 local-floor 참조를 이용하여 AR 패스스루 구현 -->
+    <a-scene
+      xr="mode: 'immersive-ar'; referenceSpaceType: 'local-floor';"
+      physics="gravity: 0 0 0"
+      embedded
+      renderer="logarithmicDepthBuffer: true;"
       vr-mode-ui="enabled: false">
       
-      <!-- 게임 전체를 감싸는 루트 엔티티: 바닥(hit test) 인식 -->
+      <!-- 게임 전체를 감싸는 루트 엔티티 (바닥 hit test용) -->
       <a-entity id="game-root" floor-detector>
       
-        <!-- 발판(Paddle): static-body, 컨트롤러 입력으로 움직임 -->
+        <!-- 발판(Paddle): static-body, 오른손 컨트롤러로 조작 -->
         <a-box id="player-bar"
           paddle-controller
           static-body
@@ -44,120 +164,17 @@
         
         <!-- 벽돌들(Bricks): static-body -->
         <a-box class="brick" static-body position="-1 1.8 -3" width="0.4" height="0.2" depth="0.2" color="#FFC65D"></a-box>
-        <a-box class="brick" static-body position="0 1.8 -3"  width="0.4" height="0.2" depth="0.2" color="#7BC8A4"></a-box>
-        <a-box class="brick" static-body position="1 1.8 -3"  width="0.4" height="0.2" depth="0.2" color="#FFC65D"></a-box>
+        <a-box class="brick" static-body position="0 1.8 -3" width="0.4" height="0.2" depth="0.2" color="#7BC8A4"></a-box>
+        <a-box class="brick" static-body position="1 1.8 -3" width="0.4" height="0.2" depth="0.2" color="#FFC65D"></a-box>
       
       </a-entity>
       
-      <!-- 카메라: AR 환경에서 헤드셋 뷰 반영 -->
+      <!-- AR 카메라 -->
       <a-camera position="0 1.6 0"></a-camera>
       
-      <!-- 오른손 컨트롤러: laser-controls로 모델링 -->
+      <!-- 오른손 컨트롤러 -->
       <a-entity id="right-controller" laser-controls="hand: right"></a-entity>
       
     </a-scene>
-    
-    <!-- JavaScript 코드를 index.html 내부에 포함 -->
-    <script>
-      // 1. 바닥 자동 인식을 위한 floor-detector 컴포넌트 (WebXR Hit Test API 활용)
-      AFRAME.registerComponent('floor-detector', {
-        init: function () {
-          this.hitTestSource = null;
-          this.refSpace = null;
-          this.viewerSpace = null;
-          this.session = null;
-          
-          this.el.sceneEl.addEventListener('enter-vr', () => {
-            this.session = this.el.sceneEl.renderer.xr.getSession();
-            if (this.session && this.session.isImmersiveAr) {
-              this.session.requestReferenceSpace('viewer').then((space) => {
-                this.viewerSpace = space;
-                return this.session.requestHitTestSource({ space: this.viewerSpace });
-              }).then((source) => {
-                this.hitTestSource = source;
-              });
-              this.session.requestReferenceSpace('local-floor').then((refSpace) => {
-                this.refSpace = refSpace;
-              });
-            }
-          });
-          
-          this.el.sceneEl.addEventListener('exit-vr', () => {
-            this.hitTestSource = null;
-            this.refSpace = null;
-            this.viewerSpace = null;
-            this.session = null;
-          });
-        },
-        tick: function () {
-          if (!this.hitTestSource || !this.session || !this.refSpace) { return; }
-          const xrFrame = this.el.sceneEl.frame;
-          if (!xrFrame) { return; }
-          const hitTestResults = xrFrame.getHitTestResults(this.hitTestSource);
-          if (hitTestResults.length > 0) {
-            const hit = hitTestResults[0];
-            const pose = hit.getPose(this.refSpace);
-            if (pose) {
-              // 게임 루트 엔티티의 위치를 실제 바닥 위치로 업데이트
-              this.el.object3D.position.set(
-                pose.transform.position.x,
-                pose.transform.position.y,
-                pose.transform.position.z
-              );
-            }
-          }
-        }
-      });
-      
-      // 2. 공 충돌 판정 및 효과 처리 (충돌 시 벽돌 제거)
-      AFRAME.registerComponent('ball-collision', {
-        init: function () {
-          this.el.addEventListener('collide', (e) => {
-            const collidedEl = e.detail.body.el;
-            if (collidedEl && collidedEl.classList.contains('brick')) {
-              collidedEl.parentNode.removeChild(collidedEl);
-              console.log('Brick destroyed!');
-            }
-          });
-        }
-      });
-      
-      // 3. ball-launcher 컴포넌트: 물리 바디에 초기 속도 부여 (1초 후 실행)
-      AFRAME.registerComponent('ball-launcher', {
-        init: function () {
-          setTimeout(() => {
-            if (this.el.body) {
-              this.el.body.velocity.set(0.5, 0.5, 0);
-            }
-          }, 1000);
-        }
-      });
-      
-      // 4. paddle-controller 컴포넌트: 오른손 컨트롤러의 트리거가 눌리면 컨트롤러의 x좌표를 발판에 반영
-      AFRAME.registerComponent('paddle-controller', {
-        schema: {
-          controllerId: { default: '#right-controller' }
-        },
-        init: function () {
-          this.controller = document.querySelector(this.data.controllerId);
-        },
-        tick: function () {
-          if (!this.controller) { return; }
-          const tracked = this.controller.components['tracked-controls'];
-          if (!tracked || !tracked.controller) { return; }
-          const gamepad = tracked.controller;
-          // 보통 버튼 0(트리거)이 눌렸을 때 발판 이동
-          if (gamepad.buttons[0] && gamepad.buttons[0].pressed) {
-            const controllerPos = new THREE.Vector3();
-            this.controller.object3D.getWorldPosition(controllerPos);
-            this.el.object3D.position.x = controllerPos.x;
-            if (this.el.body) {
-              this.el.body.position.x = controllerPos.x;
-              this.el.body.velocity.x = 0;
-            }
-          }
-        }
-      });
-    </script>
   </body>
 </html>
