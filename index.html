@@ -2,179 +2,105 @@
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
-    <title>Meta Quest3 AR 벽돌깨기 (A-Frame 1.2.0)</title>
-    <!-- A-Frame 1.2.0 (THREE.Geometry 지원) -->
-    <script src="https://aframe.io/releases/1.2.0/aframe.min.js"></script>
-    <!-- aframe-physics-system 4.0.1 -->
-    <script src="https://cdn.jsdelivr.net/npm/aframe-physics-system@4.0.1/dist/aframe-physics-system.min.js"></script>
-    
-    <!-- 컴포넌트들을 먼저 등록 (씬 이전에 로드) -->
-    <script>
-      // 1. 바닥 자동 인식 (Floor Detector)
-      AFRAME.registerComponent('floor-detector', {
-        init: function () {
-          this.hitTestSource = null;
-          this.refSpace = null;
-          this.viewerSpace = null;
-          this.session = null;
-          const sceneEl = this.el.sceneEl;
-          
-          sceneEl.addEventListener('enter-vr', () => {
-            this.session = sceneEl.renderer.xr.getSession();
-            if (this.session && this.session.isImmersiveAr) {
-              this.session.requestReferenceSpace('viewer').then((space) => {
-                this.viewerSpace = space;
-                return this.session.requestHitTestSource({ space: this.viewerSpace });
-              }).then((source) => {
-                this.hitTestSource = source;
-                console.log("Hit test source 생성됨.");
-              }).catch((err) => {
-                console.error("Hit test source 생성 에러:", err);
-              });
-              this.session.requestReferenceSpace('local-floor').then((refSpace) => {
-                this.refSpace = refSpace;
-                console.log("local-floor 참조공간 설정됨.");
-              }).catch((err) => {
-                console.error("local-floor 참조공간 에러:", err);
-              });
-            } else {
-              console.warn("immersive-ar 세션이 아닙니다.");
-            }
-          });
-          
-          sceneEl.addEventListener('exit-vr', () => {
-            this.hitTestSource = null;
-            this.refSpace = null;
-            this.viewerSpace = null;
-            this.session = null;
-            console.log("AR 세션 종료됨. 자원 정리 완료.");
-          });
-        },
-        tick: function () {
-          if (!this.hitTestSource || !this.session || !this.refSpace) { return; }
-          const xrFrame = this.el.sceneEl.frame;
-          if (!xrFrame) { return; }
-          const hitTestResults = xrFrame.getHitTestResults(this.hitTestSource);
-          if (hitTestResults.length > 0) {
-            const hit = hitTestResults[0];
-            const pose = hit.getPose(this.refSpace);
-            if (pose) {
-              this.el.object3D.position.set(
-                pose.transform.position.x,
-                pose.transform.position.y,
-                pose.transform.position.z
-              );
-              console.log("바닥 위치 업데이트:", pose.transform.position);
-            }
-          }
-        }
-      });
-      
-      // 2. 공 충돌 판정 및 효과 (Ball Collision)
-      AFRAME.registerComponent('ball-collision', {
-        init: function () {
-          this.el.addEventListener('collide', (e) => {
-            const collidedEl = e.detail.body.el;
-            if (collidedEl && collidedEl.classList && collidedEl.classList.contains('brick')) {
-              collidedEl.parentNode.removeChild(collidedEl);
-              console.log("벽돌 파괴됨:", collidedEl);
-            }
-          });
-        }
-      });
-      
-      // 3. 공 초기 발사 (Ball Launcher)
-      AFRAME.registerComponent('ball-launcher', {
-        init: function () {
-          setTimeout(() => {
-            if (this.el.body) {
-              this.el.body.velocity.set(0.5, 0.5, 0);
-              console.log("공 발사됨, 초기 속도:", this.el.body.velocity);
-            } else {
-              console.warn("ball-launcher: 물리 body가 준비되지 않음.");
-            }
-          }, 1000);
-        }
-      });
-      
-      // 4. 발판 컨트롤러 (Paddle Controller)
-      AFRAME.registerComponent('paddle-controller', {
-        schema: {
-          controllerId: { default: '#right-controller' }
-        },
-        init: function () {
-          this.controller = document.querySelector(this.data.controllerId);
-          if (!this.controller) {
-            console.warn("paddle-controller: 컨트롤러 요소를 찾을 수 없음:", this.data.controllerId);
-          }
-        },
-        tick: function () {
-          if (!this.controller) { return; }
-          const tracked = this.controller.components['tracked-controls'];
-          if (!tracked || !tracked.controller) { return; }
-          const gamepad = tracked.controller;
-          if (gamepad.buttons[0] && gamepad.buttons[0].pressed) {
-            const controllerPos = new THREE.Vector3();
-            this.controller.object3D.getWorldPosition(controllerPos);
-            this.el.object3D.position.x = controllerPos.x;
-            if (this.el.body) {
-              this.el.body.position.x = controllerPos.x;
-              this.el.body.velocity.x = 0;
-            }
-            console.log("발판 이동, 컨트롤러 x:", controllerPos.x);
-          }
-        }
-      });
-    </script>
-    
+    <title>스마트폰 웹앱 벽돌깨기</title>
+    <!-- A-Frame 라이브러리 (최신 안정 버전) -->
+    <script src="https://aframe.io/releases/1.3.0/aframe.min.js"></script>
     <style>
       body { margin: 0; padding: 0; overflow: hidden; }
     </style>
   </head>
   <body>
-    <!-- AR 모드 및 local-floor 참조를 이용하여 AR 패스스루 구현 -->
-    <a-scene
-      xr="mode: 'immersive-ar'; referenceSpaceType: 'local-floor';"
-      physics="gravity: 0 0 0"
-      embedded
-      renderer="logarithmicDepthBuffer: true;"
-      vr-mode-ui="enabled: false">
-      
-      <!-- 게임 전체를 감싸는 루트 엔티티 (바닥 hit test용) -->
-      <a-entity id="game-root" floor-detector>
-      
-        <!-- 발판(Paddle): static-body, 오른손 컨트롤러로 조작 -->
-        <a-box id="player-bar"
-          paddle-controller
-          static-body
-          position="0 0.2 -3"
-          width="1.2" height="0.2" depth="0.2"
-          color="#4CC3D9">
-        </a-box>
-        
-        <!-- 공(Ball): dynamic-body로 물리 효과 적용, 초기 발사 -->
-        <a-sphere id="ball"
-          dynamic-body="mass: 1; shape: sphere; restitution: 1.0;"
-          ball-collision
-          ball-launcher
-          position="0 0.5 -3"
-          radius="0.1"
-          color="#EF2D5E">
-        </a-sphere>
-        
-        <!-- 벽돌들(Bricks): static-body -->
-        <a-box class="brick" static-body position="-1 1.8 -3" width="0.4" height="0.2" depth="0.2" color="#FFC65D"></a-box>
-        <a-box class="brick" static-body position="0 1.8 -3" width="0.4" height="0.2" depth="0.2" color="#7BC8A4"></a-box>
-        <a-box class="brick" static-body position="1 1.8 -3" width="0.4" height="0.2" depth="0.2" color="#FFC65D"></a-box>
-      
-      </a-entity>
-      
-      <!-- AR 카메라 -->
+    <!-- 일반 3D 씬: AR 기능 없이 단순한 벽돌깨기 게임 -->
+    <a-scene id="scene" embedded>
+      <!-- 카메라: 기본 위치 설정 -->
       <a-camera position="0 1.6 0"></a-camera>
       
-      <!-- 오른손 컨트롤러 -->
-      <a-entity id="right-controller" laser-controls="hand: right"></a-entity>
+      <!-- 발판(Paddle): 터치로 좌우 이동 -->
+      <a-box id="paddle" position="0 0.5 -3" width="1.2" height="0.2" depth="0.2" color="#4CC3D9" paddle-mover></a-box>
       
+      <!-- 공(Ball): 움직이며 충돌 판정 -->
+      <a-sphere id="ball" position="0 1 -3" radius="0.1" color="#EF2D5E" ball-controller></a-sphere>
+      
+      <!-- 벽돌들(Bricks): 여러 개 배치 (필요에 따라 동적 생성 가능) -->
+      <a-box class="brick" position="-1 2 -3" width="0.4" height="0.2" depth="0.2" color="#FFC65D"></a-box>
+      <a-box class="brick" position="0 2 -3"  width="0.4" height="0.2" depth="0.2" color="#7BC8A4"></a-box>
+      <a-box class="brick" position="1 2 -3"  width="0.4" height="0.2" depth="0.2" color="#FFC65D"></a-box>
     </a-scene>
+
+    <!-- 인라인 JavaScript: 스마트폰용 터치 조작 및 게임 로직 -->
+    <script>
+      // 발판(paddle)을 터치 이벤트로 좌우 이동시키는 컴포넌트
+      AFRAME.registerComponent('paddle-mover', {
+        init: function () {
+          const sceneEl = this.el.sceneEl;
+          // canvas가 준비된 후 터치 이벤트 등록 (passive:false로 등록)
+          sceneEl.canvas.addEventListener('touchmove', evt => {
+            evt.preventDefault();
+            const touch = evt.touches[0];
+            const canvas = sceneEl.canvas;
+            // canvas의 폭(clientWidth) 기준 터치 위치 정규화: -1 ~ 1
+            const normalizedX = (touch.clientX / canvas.clientWidth) * 2 - 1;
+            // 정규화된 값을 발판의 이동 범위(여기서는 -1.5 ~ 1.5)로 매핑
+            const newX = normalizedX * 1.5;
+            this.el.object3D.position.x = newX;
+          }, {passive: false});
+        }
+      });
+
+      // 공(ball)의 이동과 충돌 판정을 처리하는 컴포넌트
+      AFRAME.registerComponent('ball-controller', {
+        schema: {
+          vx: { type: 'number', default: 0.02 },  // x축 초기 속도
+          vy: { type: 'number', default: 0.02 }   // y축 초기 속도
+        },
+        init: function () {
+          // 초기 속도 벡터 생성
+          this.velocity = new THREE.Vector3(this.data.vx, this.data.vy, 0);
+        },
+        tick: function (time, delta) {
+          const ball = this.el.object3D;
+          // delta 보정(16ms 기준)하여 속도 벡터만큼 이동
+          ball.position.add(this.velocity.clone().multiplyScalar(delta / 16));
+          
+          // 좌우 벽 충돌 (x: -1.5 ~ 1.5)
+          if (ball.position.x > 1.5 || ball.position.x < -1.5) {
+            this.velocity.x *= -1;
+          }
+          // 천장 충돌 (y=3)
+          if (ball.position.y > 3) {
+            this.velocity.y *= -1;
+          }
+          // 바닥으로 떨어지면 재시작
+          if (ball.position.y < 0) {
+            ball.position.set(0, 1, -3);
+            this.velocity.set(this.data.vx, this.data.vy, 0);
+          }
+          
+          // 발판과의 충돌 판정 (단순 bounding box 방식)
+          const paddleEl = document.querySelector('#paddle');
+          const paddlePos = paddleEl.object3D.position;
+          if (Math.abs(ball.position.x - paddlePos.x) < 0.8 &&
+              Math.abs(ball.position.y - paddlePos.y) < 0.3 &&
+              Math.abs(ball.position.z - paddlePos.z) < 0.3) {
+            // 발판과 충돌 시 y축 속도를 반전(위로 튕겨냄)
+            this.velocity.y = Math.abs(this.velocity.y);
+          }
+          
+          // 벽돌과의 충돌 판정 (각 벽돌에 대해 간단히 계산)
+          const bricks = document.querySelectorAll('.brick');
+          bricks.forEach(brick => {
+            if (!brick.getAttribute('visible')) return;
+            const brickPos = brick.object3D.position;
+            if (Math.abs(ball.position.x - brickPos.x) < 0.3 &&
+                Math.abs(ball.position.y - brickPos.y) < 0.3 &&
+                Math.abs(ball.position.z - brickPos.z) < 0.3) {
+              // 충돌 시 벽돌을 보이지 않도록 처리 및 공의 y축 반전
+              brick.setAttribute('visible', 'false');
+              this.velocity.y *= -1;
+            }
+          });
+        }
+      });
+    </script>
   </body>
 </html>
